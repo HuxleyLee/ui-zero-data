@@ -23,7 +23,7 @@ from templates import (
 from frame_extractor import VideoFrameExtractor
 import pdb
 
-VIDEO_DIR = "/data/lhx/LLaMA-Factory/data/ui_zero/data"
+VIDEO_DIR = "/apdcephfs_fsgm/share_304220499/Huxley/workspace/data/datasets/SR_v1"
 # Known default click-like action prefixes from metadata
 DEFAULT_ACTION_MAP = {
     "LClick at": "left_click",
@@ -159,9 +159,6 @@ class RawTraceProcessor:
                 {"role": "system", "content": milestone_task_system_prompt_template},
                 {"role": "user", "content": instruction},
                 {"role": "assistant", "content": answer}
-            ],
-            "images": [
-                self.get_img()
             ]
         })
         return new_data
@@ -309,7 +306,7 @@ class RawTraceProcessor:
                 raise ValueError(f"Unknown action format: {action}")
         return calls
 
-    def generate_main_task_data_qwen3(self, teach_mode=False):
+    def generate_main_task_data_qwen3(self, tool_desc="", teach_mode=False):
         """Generate main task data in Qwen3-like format: produce system/user/assistant(reasoning) and function_call messages.
 
         The assistant message contains a `reasoning_content` describing the chosen sequence of function calls.
@@ -384,29 +381,24 @@ class RawTraceProcessor:
                     think,
                     next_roadmap
                 )
+                str_function_call = json.dumps(function_calls[0], ensure_ascii=False)
 
                 # create assistant message with reasoning_content (empty content)
                 messages = []
                 messages.append({"role": "system", "content": main_task_system_prompt_template_v1})
                 messages.append({"role": "user", "content": instruction})
-                messages.append({"role": "assistant", "content": "", "reasoning_content": reasoning_content})
-
-                # append each planned call as a separate assistant function_call message
-                for action in function_calls:
-                    messages.append({
-                        "role": "assistant",
-                        "content": "",
-                        "function_call": action
-                    })
+                function_call_content = "<think>\n" + reasoning_content + "\n</think>\n\n" + str_function_call
+                messages.append({"role": "function_call", "content": function_call_content})
 
                 new_data.append({
                     "messages": messages,
-                    "images": [frame_path]
+                    "images": [frame_path],
+                    "tools": tool_desc
                 })
 
         return new_data
-    
-    def generate_step_task_data_qwen3(self):
+
+    def generate_step_task_data_qwen3(self, tool_desc=""):
         """Generate step task data in Qwen3-like format."""
         new_data = []
         for idx, step in enumerate(self.trajectory):
@@ -431,16 +423,13 @@ class RawTraceProcessor:
             messages = []
             messages.append({"role": "system", "content": main_task_system_prompt_template_v1})
             messages.append({"role": "user", "content": instruction})
-            for action in function_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "function_call": action
-                })
+            str_function_call = json.dumps(function_calls[0], ensure_ascii=False)
+            messages.append({"role": "function_call", "content": str_function_call})
 
             new_data.append({
                 "messages": messages,
-                "images": [frame_path]
+                "images": [frame_path],
+                "tools": tool_desc
             })
 
         return new_data
@@ -449,7 +438,7 @@ class RawTraceProcessor:
 class RawDataProcessor: 
     def __init__(self, raw_data_dir, save_dir, data_id="default",
                  skip_processed=True, retry_failed=False, top_num=None,
-                 trace_ids=None, task_types=None):
+                 trace_ids=None, task_types=None, tools_path=""):
         """ Initialize the RawDataProcessor with the directory containing raw data. """
         self.raw_data_dir = raw_data_dir
         self.save_dir = os.path.join(save_dir, data_id)
@@ -483,6 +472,21 @@ class RawDataProcessor:
         else:
             self.processed_tasks = set()
             self.failed_tasks = set()
+        
+        # get tool desc
+
+        if not os.path.exists(tools_path):
+            print(f"❌ 错误: 找不到工具文件 {tools_path}")
+            return
+
+        print(f"🔄 正在读取工具定义: {tools_path}")
+        try:
+            with open(tools_path, 'r', encoding='utf-8') as f:
+                tools_list = json.load(f)
+            self.tools_str = json.dumps(tools_list, ensure_ascii=False)
+        except Exception as e:
+            print(f"❌ 读取 tools 失败: {e}")
+            return
 
     def _append_and_save_json(self, path, items):
         """Append items to a JSON array file (create if missing)."""
@@ -580,14 +584,14 @@ class RawDataProcessor:
                 print(f"    ✅ Milestone data saved to {milestone_save_path}")
 
                 print(f"    {SYMBOL_INFO} Generateing Main Task data (Qwen3 format)...")
-                main_task_data_qwen3 = processor.generate_main_task_data_qwen3(teach_mode=False)
+                main_task_data_qwen3 = processor.generate_main_task_data_qwen3(tool_desc=self.tools_str, teach_mode=False)
                 all_main_task_data_qwen3.extend(main_task_data_qwen3)
                 main_task_qwen3_save_path = os.path.join(self.save_dir, "main_task_data_qwen3.json")
                 self._append_and_save_json(main_task_qwen3_save_path, main_task_data_qwen3)
                 print(f"    ✅ Main Task data (Qwen3 format) saved to {main_task_qwen3_save_path}")
 
                 print(f"    {SYMBOL_INFO} Generateing Step Task data (Qwen3 format)...")
-                step_task_data_qwen3 = processor.generate_step_task_data_qwen3()
+                step_task_data_qwen3 = processor.generate_step_task_data_qwen3(tool_desc=self.tools_str)
                 all_step_task_data_qwen3.extend(step_task_data_qwen3)
                 step_task_qwen3_save_path = os.path.join(self.save_dir, "step_task_data_qwen3.json")
                 self._append_and_save_json(step_task_qwen3_save_path, step_task_data_qwen3)
@@ -613,11 +617,11 @@ class RawDataProcessor:
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process trace hierarchy data into dataset JSONs with checkpointing.")
-    parser.add_argument("--raw-data-dir", default="/data/lhx/LLaMA-Factory/data/temp_batch/batch_partial_result_v0/",
+    parser.add_argument("--raw-data-dir", default="/apdcephfs_fsgm/share_304220499/Huxley/workspace/data/anno_data/batch_result_v0",
                         help="Root directory containing raw trace task folders")
-    parser.add_argument("--save-dir", default="/data/lhx/LLaMA-Factory/data/demo/data_generator/data/",
+    parser.add_argument("--save-dir", default="/apdcephfs_fsgm/share_304220499/Huxley/workspace/data/data_process/ui-zero-data/data",
                         help="Directory to write processed data and progress files")
-    parser.add_argument("--data-id", default="test_new", help="Subdirectory name under save-dir to store outputs")
+    parser.add_argument("--data-id", default="debug", help="Subdirectory name under save-dir to store outputs")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--skip-processed", dest="skip_processed", action="store_true",
@@ -633,6 +637,8 @@ if __name__ == "__main__":
                         help="Explicit list of trace/task ids to process (space-separated)")
     parser.add_argument("--task-types", nargs="+", default=None,
                         help="Filter task ids by these substrings (space-separated)")
+    parser.add_argument("--tools-path", type=str, default="/apdcephfs_fsgm/share_304220499/Huxley/workspace/data/data_process/ui-zero-data/tools.json",
+                        help="Path to the JSON file containing tool descriptions")
 
     args = parser.parse_args()
 
@@ -645,6 +651,7 @@ if __name__ == "__main__":
         top_num=args.top_num,
         trace_ids=args.trace_ids,
         task_types=args.task_types,
+        tools_path=args.tools_path
     )
 
     # call with no override (constructor top_num used), but allow override if desired

@@ -123,13 +123,11 @@ main_task_answer_template = """<observation>{}</observation>
 <thinking>{}</thinking>
 <roadmap>{}<roadmap/>
 <action>{}</action>
-<result>### Action: {}<result>
-"""
+<result>### Action: {}<result>"""
 
 main_task_reasoning_template = """<observation>{}</observation>
 <thinking>{}</thinking>
-<roadmap>{}<roadmap/>
-"""
+<roadmap>{}<roadmap/>"""
 
 # ============================== milestone task templates ==============================
 milestone_task_system_prompt_template = """You are a GUI Agent tasked with decomposing a higher-level task into milestones based on the observation.
@@ -149,14 +147,12 @@ Behavioral rules:
 
 
 milestone_task_instruction_template = """### Task: {}
-### Observation: <image>
 ### Please break down the task into a series of milestones based on the observation. 
 ### You can refer to the following related task examples: 
 {}
 """
 
 milestone_task_instruction_template_no_teach = """### Task: {}
-### Observation: <image>
 ### Please break down the task into a series of milestones based on the observation. 
 """
 
